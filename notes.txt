@@ -1,0 +1,8 @@
+Note: still need to have a grep by "real" process, ie search that node-inspector is bound to a port by its name, rather than ss just saying node is running on that port
+cd /proc
+find . -maxdepth 1 -type d | cut -d '/' -f2- | grep -vP '\D'
+
+There are some processes that don't contain enough information -ie. you start "node app.js" but you don't have context - /proc/ also stores a symbolic link to the startup directory:
+readlink -e /proc/PID/cwd
+This should also be a greppable field.
+

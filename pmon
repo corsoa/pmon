@@ -1,0 +1,92 @@
+#!/usr/bin/env node
+var Promise = require('bluebird');
+var exec = require('child_process').exec;
+var Table = require('cli-table2');
+var grepArg;
+if (process.argv.length < 3 ) {
+    process.stderr.write('Must supply a search term (PID, process name)');
+    process.exit();
+}
+else {
+    grepArg = process.argv[2];
+}
+
+function populateName(pid) {
+    return new Promise(function(resolve, reject) {
+        exec("cat /proc/" + pid + "/cmdline", function(error, stdout, stderr) {
+            if (error || stderr) {
+                reject(error || stderr);
+            }
+            //proc cmdline has null characters for spaces, but only non-trailing should be converted
+            //otherwise it causes formatting issues with cli-table2 
+            stdout = stdout.replace(/\0+$/,'');
+            stdout = stdout.replace(/\0/g,' ');
+            resolve(stdout);
+        });
+    });
+}
+function doMain() {
+    return new Promise(function(resolve, reject) {
+        exec("ss -nlp | grep " + grepArg + " | tr -d [:blank:] | cut -d ':' -f2- | sed 's/^\:://g' | sort", function(error, stdout, stderr) {
+            if (stderr) {
+                process.stderr.write(stderr);
+                process.exit();
+            }
+            var lines = stdout.split('\n');
+            lines.pop();
+            var line;
+            var processHash = {};
+            var numPopulated = 0;
+            if (!lines.length) {
+                resolve(processHash);
+            }
+            lines.forEach(function(line, key) {
+                var port;
+                var pid;
+                var endPortPos = line.search(/\D/);
+                if (endPortPos !== -1) {
+                   port = line.substring(0, endPortPos); 
+                }
+                var parenIndex = line.indexOf('((');
+                var endParenIndex = line.indexOf('))');
+                pid = line.substring(parenIndex, endParenIndex);
+                var firstCommaPos = pid.indexOf(',');
+                var secondCommaPos = firstCommaPos + pid.substring(firstCommaPos+1).indexOf(',');
+                pid = pid.substring(firstCommaPos+1, secondCommaPos + 1);
+                processHash[port] = {pid: pid};
+                //for each of the pids, look up the full name of the process
+                //ye olde closure problem because we're in a for-loop
+                populateName(pid).then(function(name) {
+                    processHash[port].name = name;
+                    numPopulated += 1;
+                    if (numPopulated === lines.length) {
+                        resolve(processHash);
+                    }
+                }).catch(function(err) {
+                   reject(err); 
+                });
+            });
+        });
+    });
+}
+doMain().then(function(processHash) {
+    var hashKeys = Object.keys(processHash);
+    if (!hashKeys.length) {
+       process.stdout.write('Nothing matched.'); 
+       process.exit();
+    }
+    var table = new Table({
+        head: ['Port', 'PID', 'Description'],
+        colWidths: [8, 8, 70],
+        style: {
+            head: [],
+            border: []
+        }
+    });
+    for (var i = 0; i < hashKeys.length; i++) {
+        table.push([hashKeys[i], processHash[hashKeys[i]].pid, processHash[hashKeys[i]].name]);
+    }
+    process.stdout.write(table.toString());
+}).catch(function(err) {
+    process.stderr.write(err);
+});

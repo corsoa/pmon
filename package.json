@@ -1,0 +1,24 @@
+{
+  "name": "pmon",
+  "version": "0.0.1",
+  "description": "Process Monitor and Grepper",
+  "main": "pmon",
+  "dependencies": {
+    "bluebird": "^3.4.6",
+    "cli-table2": "^0.2.0"
+  },
+  "devDependencies": {
+    "eslint": "^3.5.0",
+    "eslint-config-airbnb": "^11.1.0",
+    "eslint-plugin-import": "^1.15.0",
+    "eslint-plugin-jsx-a11y": "^2.2.2",
+    "eslint-plugin-react": "^6.3.0",
+    "mocha": "^3.0.2",
+    "should": "^11.1.0"
+  },
+  "scripts": {
+    "test": "mocha test"
+  },
+  "author": "Aaron Corso",
+  "license": "ISC"
+}
