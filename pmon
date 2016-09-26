@@ -26,12 +26,42 @@ function populateName(pid) {
     });
 }
 function readProcFile(fileName, pid) {
-    //reads a proc file - if fileName is cwd, it returns the symbolic link location.
-    if (fileName !== 'cwd') {
-        return fs.readFile('/proc/' + pid + '/' + fileName);
-    }
+    //always resolve because this function is being used to resolve a Promise.all
+    return new Promise(function(resolve, reject) {
+        var fullFile = `/proc/${pid}/${fileName}`;
+        if (fileName !== 'cwd') {
+            //reads a proc file - if fileName is cwd, it returns the symbolic link location.
+            fs.readFileAsync(fullFile).then(function(fileResult) {
+                //strip null chars / check for empty
+                var fileBody = fileResult.toString().replace(/\0/g, '');
+                if (fileBody.length) {
+                    resolve({result: fileBody, error: false, pid: pid, fileName: fileName});
+                }
+                else {
+                    resolve({result: '', error: true, pid: pid, fileName: fileName});
+                }
+            }).catch(function(err) {
+                resolve({result: err, error: true, pid: pid, fileName: fileName});
+            });
+        }
+        else {
+            fs.readlinkAsync(fullFile).then(function(fileResult) {
+                resolve({result: fileResult, error: false, pid: pid, fileName: fileName});
+            }).catch(function(err) {
+                resolve({result: err, error: true, pid: pid, fileName: fileName});
+            });
+        }
+    });
 }
 function doAlphaSearch(grepArg) {
+    return new Promise(function(resolve, reject) {
+        buildPidHash().then(function(pidHash) {
+            //search through the properties of the hash for something matching the grepArg.
+            resolve(pidHash);
+        });
+    });
+}
+function buildPidHash() {
     return new Promise(function(resolve, reject) {
         exec("find /proc/ -maxdepth 1 -type d | cut -d '/' -f3-", function(error, stdout, stderr) {
             var filesToRead = [];
@@ -45,15 +75,21 @@ function doAlphaSearch(grepArg) {
                    //filter out any non-digit dirs is /proc here - grep with extended or PCRL is only
                    //consistent on GNU Grep.
                    if (pid.match(/\D/) === null) {
-                      pidHash[pid] = {};
                       filesToRead.push(readProcFile('cwd', pid));
                       filesToRead.push(readProcFile('cmdline', pid));
                    }
                 });
                 Promise.all(filesToRead).then(function(fileArr) {
-                   console.log(fileArr); 
-                }).catch(function(err) {
-                    console.err(err);
+                    fileArr.forEach(function(promiseResult) {
+                        if (!promiseResult.error) {
+                            if (!pidHash[promiseResult.pid]) {
+                                pidHash[promiseResult.pid] = {};
+                            }
+                            var fileNameEval = promiseResult.fileName;
+                            pidHash[promiseResult.pid][fileNameEval] = promiseResult.result;
+                        }
+                    });
+                    resolve(pidHash);     
                 });
             }
         });
@@ -65,7 +101,11 @@ function doMain() {
         if (grepArg.match(/\D/) !== null) {
            isAlphaSearch = true; 
         }
-        doAlphaSearch(grepArg);
+        doAlphaSearch(grepArg).then(function(result) {
+            console.log(result);
+        }).catch(function(err) {
+            console.log(err);
+        });
         exec("ss -nlp | grep " + grepArg + " | tr -d [:blank:] | cut -d ':' -f2- | sed 's/^\:://g' | sort", function(error, stdout, stderr) {
             if (stderr) {
                 process.stderr.write(stderr);
