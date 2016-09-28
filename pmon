@@ -3,67 +3,93 @@ var Promise = require('bluebird');
 var exec = require('child_process').exec;
 var Table = require('cli-table2');
 var fs = Promise.promisifyAll(require('fs'));
+var yargs = require('yargs').argv;
+var _ = require('lodash');
+if (yargs.help || yargs.h) {
+    process.stdout.write(`Usage: 
+        pmon node -> Shows all procsses matching the argument and their associated bound ports (if any)
+        pmon -b node -> Shows only matching processes bound to a port.`);
+    process.exit();
+}
 var grepArg;
-if (process.argv.length < 3 ) {
+var numArgs = Object.keys(yargs).length;
+if (process.argv.length === numArgs) {
     process.stderr.write('Must supply a search term (PID, process name)'); process.exit();
 }
 else {
-    grepArg = process.argv[2];
+    grepArg = process.argv[numArgs];
 }
 
+function stripNullChars(stdout) {
+    //proc cmdline has null characters for spaces, but only non-trailing should be converted
+    //otherwise it causes formatting issues with cli-table2 
+    stdout = stdout.replace(/\0+$/,'');
+    stdout = stdout.replace(/\0/g,' ');
+    return stdout;
+}
 function populateName(pid) {
-    return new Promise(function(resolve, reject) {
-        exec("cat /proc/" + pid + "/cmdline", function(error, stdout, stderr) {
+    return new Promise((resolve, reject) => {
+        exec("cat /proc/" + pid + "/cmdline", (error, stdout, stderr) => {
             if (error || stderr) {
                 reject(error || stderr);
             }
-            //proc cmdline has null characters for spaces, but only non-trailing should be converted
-            //otherwise it causes formatting issues with cli-table2 
-            stdout = stdout.replace(/\0+$/,'');
-            stdout = stdout.replace(/\0/g,' ');
+            stdout = stripNullChars(stdout);
             resolve(stdout);
         });
     });
 }
 function readProcFile(fileName, pid) {
     //always resolve because this function is being used to resolve a Promise.all
-    return new Promise(function(resolve, reject) {
+    return new Promise((resolve, reject) => {
         var fullFile = `/proc/${pid}/${fileName}`;
         if (fileName !== 'cwd') {
             //reads a proc file - if fileName is cwd, it returns the symbolic link location.
-            fs.readFileAsync(fullFile).then(function(fileResult) {
+            fs.readFileAsync(fullFile).then((fileResult) => {
                 //strip null chars / check for empty
-                var fileBody = fileResult.toString().replace(/\0/g, '');
+                var fileBody = stripNullChars(fileResult.toString());
                 if (fileBody.length) {
                     resolve({result: fileBody, error: false, pid: pid, fileName: fileName});
                 }
                 else {
                     resolve({result: '', error: true, pid: pid, fileName: fileName});
                 }
-            }).catch(function(err) {
+            }).catch((err) => {
                 resolve({result: err, error: true, pid: pid, fileName: fileName});
             });
         }
         else {
-            fs.readlinkAsync(fullFile).then(function(fileResult) {
+            fs.readlinkAsync(fullFile).then((fileResult) => {
                 resolve({result: fileResult, error: false, pid: pid, fileName: fileName});
-            }).catch(function(err) {
+            }).catch((err) => {
                 resolve({result: err, error: true, pid: pid, fileName: fileName});
             });
         }
     });
 }
 function doAlphaSearch(grepArg) {
-    return new Promise(function(resolve, reject) {
-        buildPidHash().then(function(pidHash) {
+    return new Promise((resolve, reject) => {
+        buildPidHash().then((pidHash) => {
             //search through the properties of the hash for something matching the grepArg.
-            resolve(pidHash);
+            var matchedData = {};
+            var pids = Object.keys(pidHash);
+            pids.forEach((pid) => {
+                var procKeys = Object.keys(pidHash[pid]);
+                procKeys.forEach((procKey, procKeyIndex) => {
+                    if (pidHash[pid][procKey].indexOf(grepArg) !== -1) {
+                        if (!matchedData[pid]) {
+                            matchedData[pid] = {};
+                        }
+                        matchedData[pid][procKeys[procKeyIndex]] = pidHash[pid][procKey];
+                    }
+                });
+            });
+            resolve(matchedData);
         });
     });
 }
 function buildPidHash() {
-    return new Promise(function(resolve, reject) {
-        exec("find /proc/ -maxdepth 1 -type d | cut -d '/' -f3-", function(error, stdout, stderr) {
+    return new Promise((resolve, reject) => {
+        exec("find /proc/ -maxdepth 1 -type d | cut -d '/' -f3-", (error, stdout, stderr) => {
             var filesToRead = [];
             var pidHash = {};
             if (error || stderr) {
@@ -71,7 +97,7 @@ function buildPidHash() {
             }
             if (stdout) {
                 var pids = stdout.split('\n');
-                pids.forEach(function(pid, pidIndex) {
+                pids.forEach((pid, pidIndex) => {
                    //filter out any non-digit dirs is /proc here - grep with extended or PCRL is only
                    //consistent on GNU Grep.
                    if (pid.match(/\D/) === null) {
@@ -79,8 +105,8 @@ function buildPidHash() {
                       filesToRead.push(readProcFile('cmdline', pid));
                    }
                 });
-                Promise.all(filesToRead).then(function(fileArr) {
-                    fileArr.forEach(function(promiseResult) {
+                Promise.all(filesToRead).then((fileArr) => {
+                    fileArr.forEach((promiseResult) => {
                         if (!promiseResult.error) {
                             if (!pidHash[promiseResult.pid]) {
                                 pidHash[promiseResult.pid] = {};
@@ -95,22 +121,15 @@ function buildPidHash() {
         });
     });
 }
-function doMain() {
-    return new Promise(function(resolve, reject) {
-        var isAlphaSearch = false;
-        if (grepArg.match(/\D/) !== null) {
-           isAlphaSearch = true; 
-        }
-        doAlphaSearch(grepArg).then(function(result) {
-            console.log(result);
-        }).catch(function(err) {
-            console.log(err);
-        });
-        exec("ss -nlp | grep " + grepArg + " | tr -d [:blank:] | cut -d ':' -f2- | sed 's/^\:://g' | sort", function(error, stdout, stderr) {
+function buildListeningPortHash() {
+    return new Promise((resolve, reject) => {
+        exec("ss -nlp | grep " + grepArg + " | tr -d [:blank:] | cut -d ':' -f2- | sed 's/^\:://g' | sort", (error, stdout, stderr) => {
             if (stderr) {
                 process.stderr.write(stderr);
                 process.exit();
             }
+
+
             var lines = stdout.split('\n');
             lines.pop();
             var line;
@@ -119,7 +138,7 @@ function doMain() {
             if (!lines.length) {
                 resolve(processHash);
             }
-            lines.forEach(function(line, key) {
+            lines.forEach((line, key) => {
                 var port;
                 var pid;
                 var endPortPos = line.search(/\D/);
@@ -132,30 +151,61 @@ function doMain() {
                 var firstCommaPos = pid.indexOf(',');
                 var secondCommaPos = firstCommaPos + pid.substring(firstCommaPos+1).indexOf(',');
                 pid = pid.substring(firstCommaPos+1, secondCommaPos + 1);
-                processHash[port] = {pid: pid};
-                //for each of the pids, look up the full name of the process
-                //ye olde closure problem because we're in a for-loop
-                populateName(pid).then(function(name) {
-                    processHash[port].name = name;
+                processHash[pid] = {port: port};
+                populateName(pid).then((name) => {
+                    processHash[pid].desc = name;
                     numPopulated += 1;
                     if (numPopulated === lines.length) {
                         resolve(processHash);
                     }
-                }).catch(function(err) {
+                }).catch((err) => {
                    reject(err); 
                 });
             });
         });
     });
 }
-doMain().then(function(processHash) {
+function buildCombinedHash(alphaHash, portHash) {
+    _.merge(alphaHash, portHash);
+    return alphaHash;
+}
+function doMain() {
+    return new Promise((resolve, reject) => {
+        var isAlphaSearch = false;
+        if (grepArg.match(/\D/) !== null) {
+           isAlphaSearch = true; 
+        }
+        //by default, list processes bound to a port first, then other processes.
+        //If there is a 'b' flag, do not do an alpha search on processes not known to be bound to a port.
+        if (yargs.b) {
+            buildListeningPortHash().then((portHash) => {
+                resolve(portHash);
+            }).catch((err) => {
+                reject(err);
+            });
+        }
+        else {
+            doAlphaSearch(grepArg).then((alphaResult) => {
+                buildListeningPortHash().then((portResult) => {
+                   var combinedHash = buildCombinedHash(alphaResult, portResult);
+                   resolve(combinedHash); 
+                }).catch((err) => {
+                    reject(err);
+                });
+            }).catch((err) => {
+                reject(err);
+            });
+        }
+    });
+}
+doMain().then((processHash) => {
     var hashKeys = Object.keys(processHash);
     if (!hashKeys.length) {
        process.stdout.write('Nothing matched.'); 
        process.exit();
     }
     var table = new Table({
-        head: ['Port', 'PID', 'Description'],
+        head: ['PID', 'Port', 'Description'],
         colWidths: [8, 8, 70],
         style: {
             head: [],
@@ -163,9 +213,10 @@ doMain().then(function(processHash) {
         }
     });
     for (var i = 0; i < hashKeys.length; i++) {
-        table.push([hashKeys[i], processHash[hashKeys[i]].pid, processHash[hashKeys[i]].name]);
+        var desc = (processHash[hashKeys[i]].desc || processHash[hashKeys[i]].cmdline);
+        table.push([hashKeys[i], processHash[hashKeys[i]].port, desc]);
     }
     process.stdout.write(table.toString());
-}).catch(function(err) {
+}).catch((err) => {
     process.stderr.write(err);
 });
