@@ -77,7 +77,7 @@ function doAlphaSearch(grepArg) {
             pids.forEach((pid) => {
                 var procKeys = Object.keys(pidHash[pid]);
                 procKeys.forEach((procKey, procKeyIndex) => {
-                    if (pidHash[pid][procKey].indexOf(grepArg) !== -1) {
+                    if (pidHash[pid][procKey].indexOf(grepArg) !== -1 && pidHash[pid][procKey].indexOf('pmon') === -1) {
                         if (!matchedData[pid]) {
                             matchedData[pid] = {};
                         }
