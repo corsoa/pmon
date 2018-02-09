@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+
+'use strict';
 var Promise = require('bluebird');
 var exec = require('child_process').exec;
 var Table = require('cli-table2');
@@ -151,6 +153,11 @@ function buildListeningPortHash() {
                 var firstCommaPos = pid.indexOf(',');
                 var secondCommaPos = firstCommaPos + pid.substring(firstCommaPos+1).indexOf(',');
                 pid = pid.substring(firstCommaPos+1, secondCommaPos + 1);
+                // on some systems, the pid is prefixed by the literal 'pid='
+                let literalPidPos = pid.indexOf('pid=');
+                if (literalPidPos !== -1) {
+                  pid = pid.substring(literalPidPos + 4);
+                }
                 processHash[pid] = {port: port};
                 populateName(pid).then((name) => {
                     processHash[pid].desc = name;
